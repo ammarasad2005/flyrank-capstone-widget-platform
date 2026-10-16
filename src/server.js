@@ -2,25 +2,14 @@ import { config } from './config.js';
 import { createPool } from './db.js';
 import { runMigrations } from './migrate.js';
 import { createApp } from './app.js';
-import { createConsoleNotifier, startNotificationWorker } from './notifications.js';
+import { startNotificationWorker } from './notifications.js';
+import { createAlert, createNotifier } from './notifier-factory.js';
 
 const pool = createPool();
 await runMigrations(pool);
 
-const notifier = createConsoleNotifier();
-const alert = async (details) => {
-  if (!config.alertWebhookUrl) {
-    console.error(JSON.stringify({ event: 'notification_dead_letter', ...details }));
-    return;
-  }
-  const response = await fetch(config.alertWebhookUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ event: 'notification_dead_letter', ...details }),
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!response.ok) throw new Error(`alert endpoint returned HTTP ${response.status}`);
-};
+const notifier = createNotifier(pool);
+const alert = createAlert();
 
 const stopWorker = startNotificationWorker({
   pool,
@@ -32,7 +21,12 @@ const stopWorker = startNotificationWorker({
 
 const app = createApp({ pool });
 const server = app.listen(config.port, '0.0.0.0', () => {
-  console.log(JSON.stringify({ event: 'server_listening', port: config.port, environment: config.nodeEnv }));
+  console.log(JSON.stringify({
+    event: 'server_listening',
+    port: config.port,
+    environment: config.nodeEnv,
+    notificationTransport: config.notificationTransport,
+  }));
 });
 
 let shuttingDown = false;

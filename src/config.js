@@ -37,7 +37,17 @@ export const config = Object.freeze({
   notificationMaxAttempts: integer('NOTIFICATION_MAX_ATTEMPTS', 3),
   notificationBaseDelayMs: integer('NOTIFICATION_BASE_DELAY_MS', 1_000),
   alertWebhookUrl: process.env.ALERT_WEBHOOK_URL ?? '',
+  notificationTransport: (process.env.NOTIFICATION_TRANSPORT ?? 'console').toLowerCase(),
+  smtpHost: process.env.SMTP_HOST ?? '127.0.0.1',
+  smtpPort: integer('SMTP_PORT', 1025),
+  smtpFrom: process.env.SMTP_FROM ?? 'widgets@localhost',
+  smtpTo: process.env.SMTP_TO ?? 'owner@example.test',
+  smtpTimeoutMs: integer('SMTP_TIMEOUT_MS', 5_000),
 });
+
+if (!['console', 'smtp'].includes(config.notificationTransport)) {
+  throw new Error('NOTIFICATION_TRANSPORT must be "console" or "smtp".');
+}
 
 if (config.jwtSecret.length < 32) {
   throw new Error('JWT_SECRET must contain at least 32 characters. Copy .env.example to .env and replace the local value.');
