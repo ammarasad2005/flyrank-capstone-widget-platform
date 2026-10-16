@@ -13,8 +13,10 @@
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
     "worker": "node src/worker.js",
-    "test": "NODE_ENV=test node --test",
+    "test": "NODE_ENV=test node --test --test-concurrency=1",
     "phase2:smoke": "node scripts/phase2-smoke.js",
+    "probes": "node scripts/acceptance-probes.js",
+    "geo:check": "node scripts/geo-check.js",
     "demo:page": "node scripts/demo-server.js"
   },
   "dependencies": {
