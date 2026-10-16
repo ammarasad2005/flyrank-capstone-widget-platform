@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northwind Journal — a customer site that did not build the widget</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font-family: Georgia, 'Times New Roman', serif; color: #17212b; background: #f6f3ec; }
+  header { border-bottom: 1px solid #ddd5c4; padding: 18px 24px; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  header strong { font-size: 20px; letter-spacing: 0.02em; }
+  main { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 32px; padding: 28px 24px 64px; max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 12px; }
+  h2 { font-size: 19px; margin: 28px 0 8px; }
+  p { line-height: 1.65; margin: 0 0 14px; }
+  aside { position: sticky; top: 24px; align-self: start; }
+  .hint { font-family: system-ui, sans-serif; font-size: 12.5px; line-height: 1.5; color: #53606e; background: #fffdf7; border: 1px dashed #cbbfa4; border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+  .hint code { font-size: 12px; }
+  .banner { font-family: system-ui, sans-serif; font-size: 13px; background: #fde8e4; border-bottom: 1px solid #f3bcb0; color: #7a2012; padding: 10px 24px; }
+  .banner[hidden] { display: none; }
+  #server-origin { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  footer { border-top: 1px solid #ddd5c4; margin-top: 24px; padding: 18px 24px; font-family: system-ui, sans-serif; font-size: 12px; color: #6b7683; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } aside { position: static; } }
+</style>
+</head>
+<body>
+<div class="banner" id="origin-banner" hidden>
+  This page is being served from <span id="server-origin"></span>, so the demo widget will reject its origin.
+  Open <code>http://localhost:5500/</code> instead (start it with <code>npm run demo:page</code>).
+</div>
+
+<header>
+  <strong>Northwind Journal</strong>
+  <span style="font-family: system-ui, sans-serif; font-size: 13px; color: #6b7683;" id="page-origin">served from this origin</span>
+</header>
+
+<main>
+  <article>
+    <h1>A publication that never touched the widget's codebase</h1>
+    <p>
+      This is a plain HTML page. Nothing in this file imports the API, defines a form, or knows how a lead is
+      validated. It contains one <code>&lt;script&gt;</code> tag — the same one-line snippet the API returns when an
+      owner creates a widget — and the widget renders itself into the placeholder below.
+    </p>
+
+    <h2>Why this page exists</h2>
+    <p>
+      The capstone requires the widget to render and submit from an origin it does not control. This page is served
+      from <code>http://localhost:5500</code> while the API runs on <code>http://localhost:3000</code>. Different port,
+      different origin: the browser enforces CORS, sends a preflight <code>OPTIONS</code> request, and blocks the
+      submission unless the API answers correctly.
+    </p>
+
+    <h2>What to try</h2>
+    <p>
+      Submit the form with real-looking details. Then sign in to the owner dashboard at
+      <code>http://localhost:3000/demo/dashboard.html</code> as <code>owner-a@example.test</code> and confirm the lead
+      appears with its widget, timestamp, and geo fields when the provider answered.
+    </p>
+  </article>
+
+  <aside>
+    <div class="hint" id="embed-hint">
+      This widget is rendered by:<br>
+      <code>&lt;script src="http://localhost:3000/public/widget.js?id=demo-contact-widget-a" async&gt;&lt;/script&gt;</code>
+    </div>
+
+    <!-- The customer's entire integration: one line. -->
+    <script src="http://localhost:3000/public/widget.js?id=demo-contact-widget-a" async></script>
+  </aside>
+</main>
+
+<footer>Demo customer site · not part of the widget platform's repository code path.</footer>
+
+<script>
+  (function () {
+    var origin = window.location.origin;
+    document.getElementById('page-origin').textContent = 'served from ' + origin;
+    if (window.location.port !== '5500') {
+      document.getElementById('origin-banner').hidden = false;
+      document.getElementById('server-origin').textContent = origin;
+    }
+  })();
+</script>
+</body>
+</html>

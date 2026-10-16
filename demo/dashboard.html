@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlyRank Widget Platform — owner dashboard</title>
+<style>
+  :root {
+    --ink: #0f172a; --muted: #5b6577; --line: #e2e8f0; --bg: #f7f9fc;
+    --accent: #1d4ed8; --accent-soft: #e8efff; --ok: #047857; --warn: #b45309; --bad: #b42318;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--ink); background: var(--bg); font-size: 14px; }
+  header { background: #fff; border-bottom: 1px solid var(--line); padding: 14px 22px; display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: 0.01em; }
+  header .who { color: var(--muted); font-size: 12.5px; }
+  main { padding: 20px 22px 60px; max-width: 1180px; margin: 0 auto; }
+  section { margin-bottom: 24px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+  input, select, button { font: inherit; }
+  input, select { padding: 8px 10px; border: 1px solid #c8d2e0; border-radius: 7px; background: #fff; min-width: 200px; }
+  button { padding: 8px 14px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }
+  button.ghost { background: #fff; color: var(--accent); }
+  button.small { padding: 4px 9px; font-size: 12px; }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .metric { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .metric .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
+  .metric .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  table { width: 100%; border-collapse: collapse; background: #fff; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: 13px; }
+  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: #fbfcfe; position: sticky; top: 0; }
+  td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; max-height: 460px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+  .pill.active { background: #e6f7ef; color: var(--ok); }
+  .pill.archived, .pill.paused { background: #fdf1e3; color: var(--warn); }
+  .muted { color: var(--muted); }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 110px; padding-top: 8px; }
+  .bar { flex: 1; background: #bfd3ff; border-radius: 3px 3px 0 0; min-height: 2px; position: relative; }
+  .bar[data-count="0"] { background: #eef2f8; }
+  .chart-labels { display: flex; gap: 3px; font-size: 10px; color: var(--muted); margin-top: 4px; }
+  .chart-labels span { flex: 1; text-align: center; overflow: hidden; white-space: nowrap; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+  .list li:last-child { border-bottom: 0; }
+  .snippet { display: block; background: #0f172a; color: #dbeafe; padding: 10px 12px; border-radius: 8px; font-size: 12px; overflow-x: auto; white-space: pre; }
+  .empty { color: var(--muted); padding: 14px; text-align: center; }
+  .status { font-size: 12.5px; }
+  .status[data-kind="error"] { color: var(--bad); }
+  .status[data-kind="ok"] { color: var(--ok); }
+  .hidden { display: none !important; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+  pre { margin: 6px 0 0; background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 11.5px; overflow-x: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FlyRank Widget Platform · owner dashboard</h1>
+  <div class="row" style="gap: 10px;">
+    <span class="who" id="session-label">Signed out</span>
+    <button class="ghost small hidden" id="signout">Sign out</button>
+  </div>
+</header>
+
+<main>
+  <section id="login-section">
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="email">Owner email</label>
+          <input id="email" type="email" autocomplete="username" placeholder="owner-a@example.test">
+        </div>
+        <div>
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" placeholder="demo-owner-a-password">
+        </div>
+        <button id="login">Sign in</button>
+        <button class="ghost" id="fill-a" type="button">Use demo Tenant A</button>
+        <button class="ghost" id="fill-b" type="button">Use demo Tenant B</button>
+      </div>
+      <p class="status muted" id="login-status" style="margin: 12px 0 0;">
+        Demo credentials come from <code>npm run seed</code>. Tenant A owns the demo widget; signing in as Tenant B
+        proves the isolation boundary — Tenant B sees its own (empty) data only.
+      </p>
+    </div>
+  </section>
+
+  <div id="app" class="hidden">
+    <section>
+      <div class="row" style="justify-content: space-between;">
+        <div class="row">
+          <div>
+            <label for="widget-filter">Widget</label>
+            <select id="widget-filter"><option value="">All widgets</option></select>
+          </div>
+          <div>
+            <label for="days">Window</label>
+            <select id="days">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="365">Last 365 days</option>
+            </select>
+          </div>
+          <button class="ghost" id="refresh" type="button">Refresh</button>
+        </div>
+        <span class="status muted" id="status"></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Totals</h2>
+      <div class="grid">
+        <div class="metric"><div class="label">Submissions</div><div class="value" id="metric-submissions">–</div></div>
+        <div class="metric"><div class="label">Countries</div><div class="value" id="metric-countries">–</div></div>
+        <div class="metric"><div class="label">Without geo</div><div class="value" id="metric-geo">–</div></div>
+        <div class="metric"><div class="label">Widgets</div><div class="value" id="metric-widgets">–</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Counts over time</h2>
+      <div class="card">
+        <div class="bars" id="chart"></div>
+        <div class="chart-labels" id="chart-labels"></div>
+      </div>
+    </section>
+
+    <section style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+      <div>
+        <h2>Geo breakdown</h2>
+        <div class="card"><ul class="list" id="countries"><li class="muted">No data yet.</li></ul></div>
+      </div>
+      <div>
+        <h2>Per-widget statistics</h2>
+        <div class="card"><ul class="list" id="per-widget"><li class="muted">No data yet.</li></ul></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Embed snippet</h2>
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items: center;">
+          <span class="muted" id="snippet-label">Select a widget to see its snippet.</span>
+          <button class="ghost small" id="copy-snippet" type="button">Copy</button>
+        </div>
+        <code class="snippet" id="snippet" style="margin-top: 10px;">—</code>
+      </div>
+    </section>
+
+    <section>
+      <h2>Recent submissions</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Received</th><th>Widget</th><th>Fields</th><th>Geo</th><th>Provider</th></tr>
+          </thead>
+          <tbody id="submissions">
+            <tr><td colspan="6" class="empty">No submissions yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = { token: null, email: null, widgets: [], selectedWidget: '' };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function setStatus(message, kind) {
+    var node = $('status');
+    node.textContent = message;
+    node.dataset.kind = kind || '';
+  }
+
+  function api(path, options) {
+    var init = options || {};
+    init.headers = Object.assign({}, init.headers || {}, state.token ? { Authorization: 'Bearer ' + state.token } : {});
+    return fetch(path, init).then(function (response) {
+      if (response.status === 204) return null;
+      return response.text().then(function (raw) {
+        var body = {};
+        try { body = raw ? JSON.parse(raw) : {}; } catch (e) { body = {}; }
+        if (!response.ok) {
+          var message = body.error || ('HTTP ' + response.status);
+          if (body.issues && body.issues.length) message += ': ' + body.issues.map(function (i) { return i.message; }).join('; ');
+          throw new Error(message);
+        }
+        return body;
+      });
+    });
+  }
+
+  function signIn(event) {
+    event.preventDefault();
+    $('login-status').textContent = 'Signing in…';
+    $('login-status').dataset.kind = '';
+    fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value.trim(), password: $('password').value })
+    })
+      .then(function (response) {
+        return response.text().then(function (raw) {
+          var body = {};
+          try { body = raw ? JSON.parse(raw) : {}; } catch (e) { body = {}; }
+          if (!response.ok) throw new Error(body.error || ('HTTP ' + response.status));
+          return body;
+        });
+      })
+      .then(function (body) {
+        state.token = body.accessToken;
+        state.email = $('email').value.trim();
+        $('session-label').textContent = state.email + ' · token expires in ' + Math.round(body.expiresIn / 60) + ' min';
+        $('login-section').classList.add('hidden');
+        $('app').classList.remove('hidden');
+        $('signout').classList.remove('hidden');
+        $('login-status').textContent = '';
+        return loadAll();
+      })
+      .catch(function (error) {
+        $('login-status').textContent = 'Sign-in failed: ' + error.message;
+        $('login-status').dataset.kind = 'error';
+      });
+  }
+
+  function signOut() {
+    state = { token: null, email: null, widgets: [], selectedWidget: '' };
+    $('session-label').textContent = 'Signed out';
+    $('app').classList.add('hidden');
+    $('login-section').classList.remove('hidden');
+    $('signout').classList.add('hidden');
+    $('submissions').innerHTML = '<tr><td colspan="6" class="empty">No submissions yet.</td></tr>';
+  }
+
+  function loadWidgets() {
+    return api('/api/widgets').then(function (body) {
+      state.widgets = body.widgets || [];
+      var select = $('widget-filter');
+      var current = select.value;
+      select.innerHTML = '<option value="">All widgets</option>';
+      state.widgets.forEach(function (widget) {
+        var option = document.createElement('option');
+        option.value = String(widget.id);
+        option.textContent = widget.title + ' (' + widget.publicId + ')';
+        select.appendChild(option);
+      });
+      select.value = current;
+      $('metric-widgets').textContent = String(state.widgets.length);
+      renderSnippet();
+    });
+  }
+
+  function loadStats() {
+    var params = new URLSearchParams({ days: $('days').value });
+    if ($('widget-filter').value) params.set('widgetId', $('widget-filter').value);
+    return api('/api/stats?' + params.toString()).then(function (stats) {
+      $('metric-submissions').textContent = String(stats.totals.submissions);
+      $('metric-countries').textContent = String(stats.totals.countries);
+      $('metric-geo').textContent = String(stats.totals.withoutGeo);
+      renderChart(stats.byDay);
+      renderCountries(stats.byCountry);
+      renderPerWidget(stats.byWidget);
+    });
+  }
+
+  function loadSubmissions() {
+    var params = new URLSearchParams({ limit: '25' });
+    if ($('widget-filter').value) params.set('widgetId', $('widget-filter').value);
+    return api('/api/submissions?' + params.toString()).then(function (body) {
+      var table = $('submissions');
+      table.innerHTML = '';
+      if (!body.submissions.length) {
+        table.innerHTML = '<tr><td colspan="6" class="empty">No submissions yet. Submit the demo widget from http://localhost:5500/ .</td></tr>';
+        return;
+      }
+      body.submissions.forEach(function (submission) {
+        var widget = state.widgets.filter(function (w) { return w.id === submission.widgetId; })[0];
+        var tr = document.createElement('tr');
+
+        var idCell = document.createElement('td');
+        idCell.className = 'mono';
+        idCell.textContent = String(submission.id);
+
+        var whenCell = document.createElement('td');
+        whenCell.className = 'mono';
+        whenCell.textContent = new Date(submission.createdAt).toLocaleString();
+
+        var widgetCell = document.createElement('td');
+        widgetCell.textContent = widget ? widget.title : '#' + submission.widgetId;
+
+        var fieldsCell = document.createElement('td');
+        var summary = document.createElement('span');
+        summary.textContent = Object.keys(submission.fields).map(function (key) {
+          return key + ': ' + submission.fields[key];
+        }).join(' · ');
+        fieldsCell.appendChild(summary);
+
+        var geoCell = document.createElement('td');
+        geoCell.textContent = submission.geo.country
+          ? submission.geo.country + (submission.geo.city ? ' / ' + submission.geo.city : '')
+          : 'unknown';
+
+        var providerCell = document.createElement('td');
+        providerCell.className = 'mono';
+        providerCell.textContent = submission.geo.provider || '—';
+
+        tr.appendChild(idCell);
+        tr.appendChild(whenCell);
+        tr.appendChild(widgetCell);
+        tr.appendChild(fieldsCell);
+        tr.appendChild(geoCell);
+        tr.appendChild(providerCell);
+        table.appendChild(tr);
+      });
+    });
+  }
+
+  function renderChart(byDay) {
+    var chart = $('chart');
+    var labels = $('chart-labels');
+    chart.innerHTML = '';
+    labels.innerHTML = '';
+    var max = byDay.reduce(function (peak, day) { return Math.max(peak, day.count); }, 0);
+    byDay.forEach(function (day) {
+      var bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.dataset.count = String(day.count);
+      bar.style.height = max === 0 ? '2px' : Math.max(2, Math.round((day.count / max) * 104)) + 'px';
+      bar.title = day.date + ': ' + day.count;
+      chart.appendChild(bar);
+
+      var label = document.createElement('span');
+      label.textContent = byDay.length > 14 ? day.date.slice(8) : day.date.slice(5);
+      labels.appendChild(label);
+    });
+  }
+
+  function renderCountries(rows) {
+    var list = $('countries');
+    list.innerHTML = '';
+    if (!rows.length) {
+      list.innerHTML = '<li class="muted">No data yet.</li>';
+      return;
+    }
+    rows.forEach(function (row) {
+      var item = document.createElement('li');
+      var name = document.createElement('span');
+      name.textContent = row.country === 'unknown' ? 'unknown (no geo)' : row.country;
+      var count = document.createElement('strong');
+      count.textContent = String(row.count);
+      item.appendChild(name);
+      item.appendChild(count);
+      list.appendChild(item);
+    });
+  }
+
+  function renderPerWidget(rows) {
+    var list = $('per-widget');
+    list.innerHTML = '';
+    if (!rows.length) {
+      list.innerHTML = '<li class="muted">No widgets yet.</li>';
+      return;
+    }
+    rows.forEach(function (row) {
+      var item = document.createElement('li');
+      var left = document.createElement('span');
+      var title = document.createElement('span');
+      title.textContent = row.title + ' ';
+      var pill = document.createElement('span');
+      pill.className = 'pill ' + row.status;
+      pill.textContent = row.status;
+      left.appendChild(title);
+      left.appendChild(pill);
+      var count = document.createElement('strong');
+      count.textContent = String(row.count);
+      item.appendChild(left);
+      item.appendChild(count);
+      list.appendChild(item);
+    });
+  }
+
+  function renderSnippet() {
+    var id = $('widget-filter').value;
+    var widget = state.widgets.filter(function (w) { return String(w.id) === id; })[0] || state.widgets[0];
+    if (!widget) {
+      $('snippet').textContent = '—';
+      $('snippet-label').textContent = 'No widgets for this tenant.';
+      return;
+    }
+    $('snippet').textContent = widget.embed.snippet;
+    $('snippet-label').textContent = widget.title + ' · ' + widget.publicId;
+    $('copy-snippet').dataset.snippet = widget.embed.snippet;
+  }
+
+  function loadAll() {
+    setStatus('Loading…');
+    return loadWidgets()
+      .then(function () { return Promise.all([loadStats(), loadSubmissions()]); })
+      .then(function () { setStatus('Updated ' + new Date().toLocaleTimeString(), 'ok'); })
+      .catch(function (error) {
+        setStatus('Load failed: ' + error.message, 'error');
+        if (/token|401/i.test(error.message)) signOut();
+      });
+  }
+
+  $('login').addEventListener('click', signIn);
+  $('password').addEventListener('keydown', function (event) { if (event.key === 'Enter') signIn(event); });
+  $('fill-a').addEventListener('click', function () {
+    $('email').value = 'owner-a@example.test';
+    $('password').value = 'demo-owner-a-password';
+  });
+  $('fill-b').addEventListener('click', function () {
+    $('email').value = 'owner-b@example.test';
+    $('password').value = 'demo-owner-b-password';
+  });
+  $('signout').addEventListener('click', signOut);
+  $('refresh').addEventListener('click', loadAll);
+  $('days').addEventListener('change', function () { loadStats().catch(function (e) { setStatus('Load failed: ' + e.message, 'error'); }); });
+  $('widget-filter').addEventListener('change', function () {
+    renderSnippet();
+    Promise.all([loadStats(), loadSubmissions()]).catch(function (e) { setStatus('Load failed: ' + e.message, 'error'); });
+  });
+  $('copy-snippet').addEventListener('click', function () {
+    var snippet = $('copy-snippet').dataset.snippet;
+    if (!snippet) return;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(snippet).then(function () { setStatus('Snippet copied.', 'ok'); });
+    }
+  });
+})();
+</script>
+</body>
+</html>

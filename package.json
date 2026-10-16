@@ -14,7 +14,8 @@
     "seed": "node src/seed.js",
     "worker": "node src/worker.js",
     "test": "NODE_ENV=test node --test",
-    "phase2:smoke": "node scripts/phase2-smoke.js"
+    "phase2:smoke": "node scripts/phase2-smoke.js",
+    "demo:page": "node scripts/demo-server.js"
   },
   "dependencies": {
     "express": "^4.21.2",
