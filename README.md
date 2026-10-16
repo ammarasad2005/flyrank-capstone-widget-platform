@@ -1,132 +1,306 @@
-# FlyRank Widget Platform — Phase 2
+# FlyRank Capstone — Embeddable Widget & Lead-Capture Platform
 
-A Node.js/Express + PostgreSQL capstone implementing the hardened lead-submission path: tenant-scoped owner authentication and widget CRUD, origin-aware CORS/preflight, boundary and payload validation, per-IP/per-widget rate limits, a honeypot, geo-provider A→B fallback, durable submission storage, and a retryable notification outbox.
+A lead-capture platform you can embed on someone else's website with one line of HTML. An owner creates a
+tenant-isolated widget, gets a `<script>` snippet, installs it on a page the platform does not control, and every
+visitor submission is validated, abuse-checked, geo-enriched with a provider fallback chain, stored, and shown back
+to that owner — even when a geo provider or the notification side effect fails.
 
-> **Status:** Phase 2 is implemented and tested. The embeddable JavaScript asset, public widget configuration/rendering, owner submission/statistics read API, and browser second-origin demo are intentionally deferred to Phase 3. This repository is not yet the finished capstone product.
+Stack: **Node.js 20 + Express + PostgreSQL 16**, Docker Compose, no paid services and no API keys.
 
-## Phase 2 request flow
-
-```text
-Owner → POST /auth/login → short-lived JWT → tenant-scoped /api/widgets CRUD
-
-External site → OPTIONS /submissions?widget_id=… → origin allowlist + preflight
-Visitor       → POST /submissions?widget_id=…
-              → request-size / schema checks → per-IP + per-widget limits → honeypot
-              → geo provider A → provider B on failure → null geo if both fail
-              → one PostgreSQL transaction: submission + unique notification outbox job
-              → background worker: console notification, retry/backoff, terminal alert
+```
+Owner (authenticated)        Customer page (any origin)          Visitor (untrusted)
+        │                              │                                │
+        │ POST /auth/login             │ <script src="…/public/widget.js?id=…">
+        │ GET  /api/widgets  → snippet │      → GET /widgets/:id/config (cached, CORS *)
+        │ GET  /api/submissions        │      → bundle renders the form
+        │ GET  /api/stats              │                                │
+        │                              │                POST /submissions?widget_id=…
+        │                              │                  ├ boundary validation + payload cap
+        │                              │                  ├ per-IP + per-widget rate limit (token bucket)
+        │                              │                  ├ honeypot "website" field → silent 202
+        │                              │                  ├ geo provider A → provider B → null
+        │                              │                  └ one transaction: submission + outbox job
+        │                              │                                │
+        └────── dashboard reads ◄──────┴────────────────────────────────┘
+                                          background worker: notify, retry, dead-letter, alert
 ```
 
-The widget record is the source of truth for tenant ownership and permitted origins; the visitor never supplies a tenant ID. Geo lookup and notifications are secondary: provider or notifier failure does not remove an accepted lead.
+| Layer | Where |
+|---|---|
+| HTTP / CORS / auth / caching | `src/app.js` |
+| Boundary validation + public payload shapes | `src/validation.js`, `src/widget-payloads.js` |
+| Domain adapters (geo, notifications, rate limiting) | `src/geo.js`, `src/notifications.js`, `src/rate-limiter.js` |
+| Data access + transactions (tenant-scoped SQL) | `src/repositories.js`, `src/db.js` |
+| Schema, indexes, seed | `db/migrations/`, `src/migrate.js`, `src/seed-data.js` |
+| Browser bundle and demo pages | `public/widget.v1.js`, `demo/`, `scripts/demo-server.js` |
 
-## Run locally
-
-Requirements: Node.js 20.19+ and Docker Compose v2.
+## Quick start (clean clone, Docker required)
 
 ```bash
+git clone https://github.com/ammarasad2005/flyrank-capstone-widget-platform.git
+cd flyrank-capstone-widget-platform
 cp .env.example .env
-npm install
-docker compose up -d --build
-docker compose exec app npm run seed
-npm test
+
+docker compose up -d --build --wait app      # PostgreSQL 16 + API; migrations run on boot
+docker compose exec app npm run seed         # two demo tenants, two owners, one active widget
 ```
 
-The seed command is safe to rerun. It creates two demo tenants, two owner accounts, and one active widget for Tenant A. It prints the development-only credentials:
-
-- Tenant A: `owner-a@example.test` / `demo-owner-a-password`
-- Tenant B: `owner-b@example.test` / `demo-owner-b-password`
-- Public demo widget ID: `demo-contact-widget-a`
-
-**These fixture passwords are public, local-demo-only values. Never reuse them outside a disposable development environment.** The app runs migrations on startup. PostgreSQL is exposed on host port `5432`; the API is exposed on `3000` by default. The Compose initialization script creates a separate `widget_platform_test` database for tests. `npm test` runs from the host against `TEST_DATABASE_URL` in `.env` and uses real PostgreSQL with deterministic provider/notifier mocks; it truncates only that test database and refuses to run if its name does not end in `_test`.
-
-To exercise the live HTTP path as well (this creates a demo lead and may call the public geo providers):
+Then, in two terminals:
 
 ```bash
-npm run phase2:smoke
+npm run demo:page      # the "customer site" on http://localhost:5500  (second origin)
+npm test               # 19 PostgreSQL-backed integration tests (needs the compose database)
 ```
 
-`API_URL`, `WIDGET_PUBLIC_ID`, and `SMOKE_ORIGIN` can override its defaults. The smoke script reports whether real geo enrichment was available; deterministic fallback and all-providers-down proofs are in the test suite. Do not run the smoke command if you do not want a lead inserted into the local demo database.
+- **Customer site (renders the widget):** <http://localhost:5500/>
+- **Owner dashboard:** <http://localhost:3000/demo/dashboard.html> — sign in as `owner-a@example.test` /
+  `demo-owner-a-password`
+- **API health:** <http://localhost:3000/health> · readiness: <http://localhost:3000/ready>
 
-To stop containers without deleting local data:
+Seeded fixtures (development only — never reuse these passwords anywhere else):
+
+| Tenant | Owner | Password | Data |
+|---|---|---|---|
+| Demo Company A | `owner-a@example.test` | `demo-owner-a-password` | widget `demo-contact-widget-a` (allowed origins `http://localhost:5500`, `http://127.0.0.1:5500`) |
+| Demo Company B | `owner-b@example.test` | `demo-owner-b-password` | no widgets — used to prove tenant isolation |
+
+`npm run seed` is idempotent. `npm test` runs against the separate `widget_platform_test` database created by
+`docker/postgres/init/01-create-test-db.sql`; it truncates only that database and refuses to run unless the database
+name ends in `_test`. If you use a hosted PostgreSQL instead, set `TEST_DATABASE_URL` to a disposable `_test` database.
+
+Other scripts:
 
 ```bash
-docker compose down
+npm run probes       # the six acceptance probes against the running stack (see "Acceptance probes")
+npm run geo:check    # show live provider A/B answers for a public IP (default 8.8.8.8)
+npm run phase2:smoke # single live cross-origin submission + persistence/outbox check
+npm run worker       # optional standalone outbox worker (the API also runs one in-process)
+npm run migrate      # apply migrations explicitly
 ```
 
-## API surface implemented in Phase 2
+## Acceptance probes
 
-All responses are JSON unless the endpoint returns `204`. The demo widget allows origins `http://localhost:5500` and `http://127.0.0.1:5500`.
+`npm run probes` executes the brief's six behavioural promises against the running system and prints one
+`PASS`/`FAIL` line each (`evidence/acceptance-probes.txt` holds a real transcript):
 
-### Owner authentication and widget management
+| Probe | What it does |
+|---|---|
+| 1 | Posts from `Origin: http://localhost:5500`, then reads the lead back through `GET /api/submissions` |
+| 2 | Sends malformed JSON and an oversized body → `400 malformed_json`, `413 payload_too_large` |
+| 3 | Bursts until `429` with `Retry-After`, checks `/health` and `/widgets/:id/config` still answer, then succeeds after the wait |
+| 4 | Provider A down → provider B enriches; both down → lead still stored without geo (deterministic mock tests) |
+| 5 | Notification throws every time → request still `201`, lead stored, alert recorded |
+| 6 | Fills the honeypot like a bot → `202` acknowledged, submission count unchanged |
 
-`POST /auth/login`
+Probes 4 and 5 need deterministic provider/notifier failures, so they re-run the named integration tests inside
+`npm test` and report their result; the other four are live HTTP probes.
 
-```json
-{"email":"owner-a@example.test","password":"demo-owner-a-password"}
-```
+## API
 
-Returns a one-hour Bearer token. Supply `Authorization: Bearer <accessToken>` to:
+All responses are JSON except `204`. Owner routes need `Authorization: Bearer <accessToken>` from `/auth/login`.
 
-- `GET /api/widgets` — list only widgets belonging to the JWT tenant.
-- `POST /api/widgets` — create a widget. Supported kinds: `signup`, `contact`, `cta`. Provide a `fields` array and optionally `buttonText`, `displayOptions`, and `allowedOrigins`.
-- `GET /api/widgets/:id` — read a tenant-owned widget.
-- `PATCH /api/widgets/:id` — update validated widget properties.
-- `DELETE /api/widgets/:id` — archive (soft-delete) a tenant-owned widget.
+### Widget management (authenticated, tenant-scoped)
 
-A different tenant receives `404` for another tenant's widget ID. Unauthenticated owner requests receive `401`.
-
-### Public lead submission
-
-`OPTIONS /submissions?widget_id=demo-contact-widget-a` supports `POST` preflight with `Content-Type` and `Idempotency-Key`. The request `Origin` must exactly match the widget's allowlist.
-
-`POST /submissions?widget_id=demo-contact-widget-a`
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/auth/login` | `{email, password}` → one-hour Bearer token |
+| `GET` | `/api/widgets` | only the caller's tenant; each widget carries `embed.snippet`, `embed.scriptUrl`, `embed.configUrl` |
+| `POST` | `/api/widgets` | `kind` (`signup`/`contact`/`cta`), `title`, `description`, `fields[]`, `buttonText`, `displayOptions{theme,position}`, `allowedOrigins[]` |
+| `GET` | `/api/widgets/:id` | another tenant's ID returns `404` |
+| `PATCH` | `/api/widgets/:id` | partial update; omitted properties keep their values; `version` increments |
+| `DELETE` | `/api/widgets/:id` | archives (soft delete); the public config stops serving immediately |
+| `GET` | `/api/widgets/:id/embed` | the one-line snippet an owner pastes |
 
 ```json
 {
-  "fields": {
-    "name": "Ada Lovelace",
-    "email": "ada@example.test",
-    "message": "Please contact me."
-  },
-  "website": ""
+  "widget": {
+    "id": 1,
+    "publicId": "demo-contact-widget-a",
+    "embed": {
+      "snippet": "<script src=\"http://localhost:3000/public/widget.js?id=demo-contact-widget-a\" async></script>",
+      "scriptUrl": "http://localhost:3000/public/widget.js?id=demo-contact-widget-a",
+      "configUrl": "http://localhost:3000/widgets/demo-contact-widget-a/config"
+    }
+  }
 }
 ```
 
-A non-empty `website` honeypot value is acknowledged with `202` and is not stored. Accepted submissions return `201`; a repeated `Idempotency-Key` for the same widget returns `200` with the original submission ID. A missing/unknown widget returns `404`, a disallowed origin returns `403`, invalid data returns `422`, malformed JSON returns `400`, an oversized body returns `413`, and exhausted limits return `429` with `Retry-After`.
+Unauthenticated owner requests → `401`; invalid bodies → `422` with an `issues[]` array.
 
-Other operational endpoints: `GET /health` (process liveness) and `GET /ready` (database readiness).
+### Public widget delivery (no auth, cache-controlled)
 
-## Configuration and safeguards
+| Method | Path | Headers |
+|---|---|---|
+| `GET` | `/widgets/:publicId/config` | `Cache-Control: public, max-age=60, must-revalidate`, weak `ETag`, `Access-Control-Allow-Origin: *`; `304` on revalidation. Payload contains only public rendering data — never a tenant ID or owner email. Archived/missing widgets → `404`. |
+| `GET` | `/public/widget.v1.js` | versioned bundle: `Cache-Control: public, max-age=31536000, immutable`, ETag; `304` supported |
+| `GET` | `/public/widget.js` | stable alias used by snippets: same bundle with `Cache-Control: public, max-age=300` (served directly — a cross-origin redirect would be blocked by Chromium's Opaque Response Blocking) |
+| `GET` | `/public/widget.v0.js` | any non-current version → `410 stale_widget_bundle` |
 
-All settings are environment-driven; `.env` is ignored by Git. `.env.example` contains local-only values. Replace `JWT_SECRET` before any non-local use. The demo database password in Compose is for local development only.
+Cache-busting is a release step: ship `public/widget.v2.js`, bump `WIDGET_ASSET_VERSION` in
+`src/widget-payloads.js`, and the alias/immutable URLs change together so browsers keep serving the old immutable
+bundle only for pages that request it explicitly.
 
-- `RATE_LIMIT_MAX` — per-IP request cap per window (default 10).
-- `RATE_LIMIT_PER_WIDGET_MAX` — aggregate per-widget cap per window (default 100).
-- `RATE_LIMIT_WINDOW_MS` — rate window (default 60 seconds).
-- `BODY_LIMIT` — Express JSON request limit (default `10kb`).
-- `GEO_TIMEOUT_MS` — timeout for each geo provider attempt.
-- `NOTIFICATION_MAX_ATTEMPTS`, `NOTIFICATION_BASE_DELAY_MS`, and `NOTIFICATION_POLL_MS` — outbox retry/worker controls.
-- `ALERT_WEBHOOK_URL` — optional terminal-failure alert destination; blank means an alert is recorded to the service log.
+### Public submission (cross-origin)
 
-The worker runs in the API process by default. `npm run worker` can start a separate worker against the same database; PostgreSQL row locking prevents two workers from claiming the same due job at the same time. The sample notifier writes a small confirmation event to the console; no external email service is configured.
+`OPTIONS /submissions?widget_id=…` — resolves the active widget and its origin allowlist, then returns `204` with
+`Access-Control-Allow-Origin: <request Origin>`, `Access-Control-Allow-Methods: POST, OPTIONS`,
+`Access-Control-Allow-Headers: Content-Type, Idempotency-Key`, `Access-Control-Max-Age: 600`. A different origin →
+`403`; an unsupported method or header → `403`.
 
-## Architecture and implementation notes
+`POST /submissions?widget_id=…`
 
-- `src/app.js` — HTTP routes, CORS/preflight, auth boundary, and response mapping.
-- `src/validation.js` — Zod schemas and dynamic widget-field validation.
-- `src/auth.js`, `src/passwords.js` — HMAC-signed JWTs and salted `scrypt` password hashes.
-- `src/geo.js` — injectable `ip-api.com` → `ipapi.co` lookup with bounded requests and null fallback.
-- `src/notifications.js` — transactional outbox insertion, `SKIP LOCKED` worker claims, retries, dead-letter state, and alert callback.
-- `src/repositories.js`, `src/db.js`, `src/migrate.js`, `db/migrations/` — tenant-aware SQL/data access, transactions, PostgreSQL pool, versioned schema, and indexes.
-- `src/seed-data.js`, `src/seed.js` — repeatable local demo fixtures.
-- `test/phase2.test.js` — PostgreSQL-backed behavioral tests using injected failure mocks.
+```json
+{ "fields": { "name": "Ada Lovelace", "email": "ada@example.test", "message": "Please contact me." }, "website": "" }
+```
 
-See `DESIGN.md` for the current design snapshot, `EVIDENCE.md` for concrete Phase 2 test evidence, and `BUILDLOG.md` for the implementation log and the problems hit along the way.
+| Result | Status |
+|---|---|
+| accepted | `201 {received, submissionId}` |
+| repeated `Idempotency-Key` for the same widget | `200 {received, submissionId, reused: true}` (no second geo call or outbox job) |
+| filled honeypot `website` | `202 {received: true}` — nothing stored |
+| unknown/archived widget | `404 widget_not_found` |
+| origin not in the widget's allowlist | `403 origin_not_allowed` |
+| invalid/unknown/missing/overlong field, unknown top-level key | `422 validation_failed` with `issues[]` |
+| malformed JSON | `400 malformed_json` |
+| body over `BODY_LIMIT` | `413 payload_too_large` |
+| per-IP or per-widget limit exhausted | `429 rate_limit_exceeded` + `Retry-After` |
 
-## Deliberate limits at this phase
+Validation is driven by the widget definition: only declared field names are accepted, `email` fields are format
+checked, values are trimmed and length-capped, `website` is reserved and can never be declared.
 
-- The widget JavaScript/config endpoint, an actual browser-rendered second-origin page, dashboard submission/statistics endpoints, and `capstone.yaml` are Phase 3 work—not claimed as complete here.
-- Rate-limit buckets are in process and reset when the API restarts; this is a local single-service implementation, not a distributed quota system.
-- The default proxy trust setting is conservative (`req.ip` as seen by Node). A deployment behind a reverse proxy needs an explicit trusted-proxy configuration before relying on real client IPs for rate limits or geo lookups.
-- Visitor IPs are sent to the configured public geo providers when possible; raw IPs are not stored in the submission table. A production privacy notice/retention policy is outside this Phase 2 implementation.
-- Notifications are console-only by default. A real email/webhook delivery adapter is not configured; retry behavior is verified with deterministic test doubles.
+### Owner dashboard (authenticated, tenant-scoped)
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/submissions?limit=20&offset=0&widgetId=…` | newest first, `pagination{limit,offset,total,hasMore}` |
+| `GET` | `/api/submissions/:id` | another tenant's submission → `404` |
+| `GET` | `/api/stats?days=30&widgetId=…` | `totals{submissions,countries,withoutGeo,lastSubmissionAt}`, `byDay[]` (zero-filled), `byWidget[]`, `byCountry[]` (geo breakdown, `unknown` bucket) |
+
+A static dashboard (`/demo/dashboard.html`, same origin as the API) renders those endpoints: metrics, counts-over-time
+bars, geo breakdown, per-widget stats, the embed snippet, and the recent-submissions table.
+
+## Reliability and safety design
+
+- **The lead is the product.** The submission row and its outbox job are written in one transaction. Geo lookup runs
+  before it and can fail silently (`null` geo columns); notification runs after it in a separate worker, so neither can
+  delete an accepted lead.
+- **Geo fallback chain.** `ip-api.com` → `ipapi.co`, each bounded by `GEO_TIMEOUT_MS`; a failure or unusable answer
+  moves to the next provider; if both fail the lead is stored with null geo. Providers are injectable, so both failure
+  modes are tested deterministically instead of by waiting for a real outage. Raw visitor IPs are not stored.
+- **Durable outbox.** `notification_jobs` rows are claimed with `FOR UPDATE SKIP LOCKED` (safe with more than one
+  worker), retried with exponential backoff, reclaimed if a worker dies mid-job, and end in `dead_letter` with a
+  failure alert (optional `ALERT_WEBHOOK_URL`, otherwise a structured log line).
+- **Idempotency.** `(widget_id, idempotency_key)` is unique, so a retried submission returns the original ID; the
+  outbox key `submission:<id>:confirmation` prevents duplicate notifications.
+- **Abuse controls.** Token-bucket limits per client IP and per widget. A burst is throttled, `Retry-After` reports the
+  exact recovery time, and *another* caller or the rest of the API (config, health, owner routes) is unaffected.
+  An in-browser guard stops double submits with the same idempotency key, and the honeypot drops bot posts.
+- **Tenant isolation in SQL.** Every owner query carries `tenant_id` from the verified JWT; the public path derives
+  ownership from the widget row, never from request JSON.
+- **Boundary validation.** Zod schemas at the HTTP edge, a JSON body cap, and a JSON error handler so a bad request is
+  never a `500`.
+- **Secrets.** Configuration is environment-only (`.env` is git-ignored, `.env.example` is committed); the app refuses
+  to boot with a `JWT_SECRET` shorter than 32 characters. Nothing secret is logged.
+
+## Database
+
+```
+tenants(id, name UNIQUE)
+users(id, tenant_id → tenants, email UNIQUE, password_hash)          -- scrypt hashes
+widgets(id, tenant_id → tenants, public_id UNIQUE, kind, title, description,
+        fields JSONB, button_text, display_options JSONB,
+        allowed_origins TEXT[], version, status, timestamps)
+submissions(id, tenant_id → tenants, widget_id → widgets, fields JSONB,
+        idempotency_key, geo_country, geo_city, geo_provider, created_at)
+        UNIQUE (widget_id, idempotency_key)
+notification_jobs(id, submission_id → submissions, idempotency_key UNIQUE,
+        status, attempts, next_attempt_at, last_error, timestamps)
+```
+
+Migrations run on boot and are recorded in `schema_migrations`. Indexes cover tenant/widget ownership and status,
+`(tenant_id, created_at DESC)` for dashboard lists and timelines, `(tenant_id, geo_country, created_at DESC)` for the
+geo breakdown, `(widget_id, created_at DESC)` for per-widget history, due outbox jobs
+`(status, next_attempt_at, id)`, and a partial index on dead-lettered jobs.
+
+## Configuration
+
+`.env.example` lists every variable with safe local values. Notable ones: `PORT`, `PUBLIC_BASE_URL` (the origin used in
+generated snippets and config `submitUrl`), `DATABASE_URL`, `TEST_DATABASE_URL`, `JWT_SECRET` (≥32 chars),
+`RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX`, `RATE_LIMIT_PER_WIDGET_MAX`, `BODY_LIMIT`, `GEO_TIMEOUT_MS`,
+`NOTIFICATION_POLL_MS`, `NOTIFICATION_MAX_ATTEMPTS`, `NOTIFICATION_BASE_DELAY_MS`, `ALERT_WEBHOOK_URL`,
+`DEMO_PORT`, and `DEMO_ALLOWED_ORIGINS` (extra exact origins for the seeded demo widget, e.g. when a hosted preview
+serves the demo page on another host).
+
+## Optional: see the email side effect in a mailbox
+
+The default notification transport is a structured console log. To watch the confirmation actually get delivered,
+start the bundled Mailpit catcher and switch the transport:
+
+```bash
+docker compose up -d mailpit                          # SMTP on :1025, web UI on http://localhost:8025
+NOTIFICATION_TRANSPORT=smtp docker compose up -d --force-recreate app   # or set it in .env
+curl -X POST 'http://localhost:3000/submissions?widget_id=demo-contact-widget-a' \
+  -H 'origin: http://localhost:5500' -H 'content-type: application/json' \
+  -d '{"fields":{"name":"Ada","email":"ada@example.test","message":"Hello"}}'
+open http://localhost:8025                            # the message "New lead #<id>" is in the inbox
+```
+
+The SMTP adapter is a ~100-line dependency-free client (`createSmtpNotifier` in `src/notifications.js`), so the $0 stack
+stays intact. It is still a **side effect**: if the catcher is down the submission still returns `201` and is stored, the
+job retries, and it ends in `dead_letter` with an alert. Header values are stripped of CR/LF so a submission cannot
+inject mail headers. Switch back with `NOTIFICATION_TRANSPORT=console`.
+
+## Verification walkthrough
+
+`scripts/verify-walkthrough.sh` starts from a destroyed stack and checks every externally checkable promise in the
+brief — owner auth and CRUD, tenant isolation, snippet generation, cache headers and ETag revalidation, versioned bundle
+and stale-version handling, CORS/preflight, every validation status code, honeypot, persistence and tenant linkage,
+dashboard reads, statistics, burst throttling, and the outbox — printing one `PASS`/`FAIL` line per check. It exits
+non-zero on any failure.
+
+```bash
+docker compose down -v && docker compose up -d --build --wait app
+docker compose exec app npm run seed
+bash scripts/verify-walkthrough.sh          # 50 checks
+node scripts/verify-browser.mjs             # optional Chromium pass (needs: npm i --no-save playwright)
+```
+
+`VERIFICATION.md` maps every statement in the brief to a verdict and the transcript that proves it.
+
+## Tests and evidence
+
+`npm test` runs 19 integration tests against real PostgreSQL with deterministic provider/notifier mocks: the hardened
+submission path (CORS, enrichment, fallback, all-down, validation, rate limits, honeypot, idempotency), the durable
+outbox and worker, widget delivery and caching, tenant-scoped dashboard reads and statistics, and the rate limiter's
+recovery behaviour. `test/phase2.test.js`, `test/phase3.test.js` and `test/notifications-smtp.test.js` are all part of that suite; the SMTP
+tests run against an in-process fake SMTP server, so they need no Mailpit and no network. The command uses
+`--test-concurrency=1` because every file truncates the shared `_test` database between its own fixtures.
+
+- `VERIFICATION.md` — statement-by-statement verdict against the brief, with the commands and transcripts behind it.
+- `EVIDENCE.md` — one proof per required checkpoint, plus the six acceptance probes.
+- `evidence/acceptance-probes.txt` — real `npm run probes` transcript.
+- `evidence/*.png` — Chromium screenshots of the widget on `localhost:5500` and the owner dashboard showing the stored lead.
+- `BUILDLOG.md` — what each session built, the problems hit, and what changed as a result.
+- `DESIGN.md` — design, layers, and the explicit non-goals.
+- `capstone.yaml` — the evaluator manifest (run, seed, test, base URL, endpoints to probe).
+- `.github/workflows/ci.yml` — CI runs the same suite against a PostgreSQL service container.
+
+## Deliberate limitations
+
+- Everything runs locally: no hosting, CDN, custom domain, or paid email provider. The default notification adapter logs
+  a structured `confirmation_notification_sent` event; the optional SMTP adapter delivers into the bundled Mailpit
+  catcher. A real provider would only need to implement `send({submissionId, idempotencyKey})`.
+- Rate-limit buckets live in one process and reset on restart; this is not a distributed quota service.
+- Client IPs are `req.ip` as seen by Node. Behind a reverse proxy you must configure trusted proxies before relying on
+  per-IP limits or geo lookups.
+- Live geo enrichment needs outbound internet and a routable visitor IP; private/container addresses yield null geo,
+  which is the documented degrade path. No raw IPs are persisted and there is no retention/GDPR workflow.
+- The widget supports `text`, `email`, `textarea`, and `tel` fields with `light`/`dark` themes and
+  `inline`/`popover` positioning. It is intentionally not a form builder, and there is no live-updating dashboard,
+  targeting rule, CAPTCHA, or account sign-up.
+- The owner dashboard is a small static page against the API, not a front-end product.
+
+
+## License
+
+MIT — see `LICENSE`.

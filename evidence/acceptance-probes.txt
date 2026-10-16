@@ -1,0 +1,24 @@
+
+> flyrank-capstone-widget-platform@0.1.0 probes
+> node scripts/acceptance-probes.js
+
+Acceptance probes against http://127.0.0.1:3000 (widget demo-contact-widget-a, browser origin http://localhost:5500)
+
+      (throttled with Retry-After 1s — waiting before retrying, attempt 1/4)
+PASS  Probe 1 — cross-origin submission stored and visible
+      POST from Origin http://localhost:5500 → 201 (submission 28); dashboard API returns it
+      (throttled with Retry-After 6s — waiting before retrying, attempt 1/4)
+      (throttled with Retry-After 5s — waiting before retrying, attempt 1/4)
+PASS  Probe 2 — malformed and oversized payloads get clean JSON 4xx
+      malformed → 400 malformed_json; oversized → 413 payload_too_large
+      (throttled with Retry-After 6s — waiting before retrying, attempt 1/4)
+PASS  Probe 6 — filled honeypot is dropped without a stored lead
+      honeypot submission → 202 acknowledged; stored leads 28 → 28
+PASS  Probe 3 — burst is throttled and service keeps serving
+      1 submissions before 429 (rate_limit_exceeded, Retry-After 5s); /health 200, config 200; after 5s wait the next submission → 201
+PASS  Probe 4 — provider A down → provider B enriches; both down → still stored
+      node --test --test-name-pattern "provider A failure falls back…|both geo providers failing…" → both tests passed (injected provider failures, real PostgreSQL)
+PASS  Probe 5 — failing notification does not block storage
+      node --test --test-name-pattern "notification failure retries to dead letter" → passed (notifier throws three times; lead remains stored; alert fires)
+
+6/6 probes passed
