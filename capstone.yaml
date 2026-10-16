@@ -1,0 +1,99 @@
+# capstone.yaml — evaluator manifest for the FlyRank Lead-Capture / Embeddable Widget capstone.
+#
+# The system runs locally with Docker Compose; no hosting, CDN, paid service, or API key is
+# needed. Commands are meant to be run from the repository root after cloning.
+#
+#   docker compose up -d --build --wait app   (database + API, migrations run on boot)
+#   docker compose exec app npm run seed      (two demo tenants, two owners, one widget)
+#   npm run demo:page                         (the separate-origin "customer site")
+
+run: docker compose up -d --build --wait app
+seed: docker compose exec app npm run seed
+test: npm test
+
+base_url: http://localhost:3000
+widget_origin: http://localhost:5500
+
+# Everything below is probe-ready with the seeded demo data.
+demo:
+  public_widget_id: demo-contact-widget-a
+  owner_a: { email: owner-a@example.test, password: demo-owner-a-password }
+  owner_b: { email: owner-b@example.test, password: demo-owner-b-password }
+  dashboard_page: http://localhost:3000/demo/dashboard.html
+  customer_site: http://localhost:5500/
+
+endpoints:
+  # Public delivery (no auth): config is cached 60 s, the bundle is versioned + immutable.
+  - name: widget_config
+    method: GET
+    path: /widgets/demo-contact-widget-a/config
+    expect: 200 with Cache-Control max-age=60 and an ETag
+  - name: widget_bundle
+    method: GET
+    path: /public/widget.v1.js
+    expect: 200 JavaScript with Cache-Control max-age=31536000, immutable
+  - name: widget_bundle_alias
+    method: GET
+    path: /public/widget.js?id=demo-contact-widget-a
+    expect: 200 (short cache) serving the current versioned bundle
+
+  # Public submission path (cross-origin).
+  - name: submission_preflight
+    method: OPTIONS
+    path: /submissions?widget_id=demo-contact-widget-a
+    headers: { Origin: http://localhost:5500, Access-Control-Request-Method: POST }
+    expect: 204 with Access-Control-Allow-Origin echoing the origin
+  - name: submission_create
+    method: POST
+    path: /submissions?widget_id=demo-contact-widget-a
+    headers: { Origin: http://localhost:5500, Content-Type: application/json }
+    body: '{"fields":{"name":"Ada Lovelace","email":"ada@example.test","message":"Hello"}}'
+    expect: 201 with a submissionId
+
+  # Owner path (Bearer token from POST /auth/login).
+  - name: login
+    method: POST
+    path: /auth/login
+    body: '{"email":"owner-a@example.test","password":"demo-owner-a-password"}'
+    expect: 200 with accessToken
+  - name: widgets
+    method: GET
+    path: /api/widgets
+    auth: bearer
+    expect: 200, only the caller's tenant widgets, each with an embed snippet
+  - name: widget_embed
+    method: GET
+    path: /api/widgets/1/embed
+    auth: bearer
+    expect: 200 with the one-line <script> snippet
+  - name: submissions
+    method: GET
+    path: /api/submissions?limit=20
+    auth: bearer
+    expect: 200, paginated submissions for the caller's tenant only
+  - name: stats
+    method: GET
+    path: /api/stats?days=30
+    auth: bearer
+    expect: 200 with totals, counts over time, per-widget stats, and geo breakdown
+
+optional:
+  # Not required by the brief; both are free and local.
+  mail_catcher: docker compose up -d mailpit    # UI http://localhost:8025, use NOTIFICATION_TRANSPORT=smtp
+  geo_check: npm run geo:check                  # live provider A/B answers for a public IP (default 8.8.8.8)
+  full_walkthrough: bash scripts/verify-walkthrough.sh   # 50 checks against the running stack
+
+acceptance_probes:
+  # npm run probes executes all six and prints PASS/FAIL per probe.
+  - "Probe 1 — cross-origin POST is stored and visible via GET /api/submissions"
+  - "Probe 2 — malformed (400) and oversized (413) payloads return clean JSON errors"
+  - "Probe 3 — a burst receives 429 with Retry-After; normal traffic succeeds afterwards"
+  - "Probe 4 — provider A down → provider B enriches; both down → stored without geo"
+  - "Probe 5 — a throwing notification does not prevent storage"
+  - "Probe 6 — a filled honeypot is acknowledged and not stored"
+
+limits:
+  - Hosting is not required; the API, database, dashboard, and demo customer site all run locally.
+  - Geo enrichment needs outbound internet access; when the providers cannot resolve a private or
+    container IP the lead is still stored and the geo columns stay null (proved by tests).
+  - Rate-limit buckets are in-process, so they reset when the API restarts.
